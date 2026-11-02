@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "box3d_baked_collision.h"
 #include <godot_cpp/classes/mesh.hpp>
 #include <godot_cpp/classes/node3d.hpp>
 #include <godot_cpp/variant/aabb.hpp>
@@ -75,6 +76,8 @@ private:
 	// deduplicated by content first), so they only have to survive the create
 	// call.
 	b3CompoundData *compound_data = nullptr;
+	// Independently owned immutable blob, never passed to b3DestroyCompound.
+	Ref<Box3DBakedCollision> baked_collision;
 	Box3DWorld *world = nullptr;
 
 	BodyType body_type = DYNAMIC;
@@ -280,6 +283,7 @@ private:
 	// children, or the body's own shape_type shape. Assumes a live b3 body that
 	// currently has no shapes, and refreshes the debug caches on the way out.
 	void build_shapes();
+	void build_offline_baked_shape();
 	// Replaces every shape on a live body WITHOUT destroying the body (P-010).
 	// The b3 body id survives, and with it the velocity, the sleep state, the
 	// solver pose, the attached joints, the body name and every b3BodyDef
@@ -608,6 +612,8 @@ public:
 	Ref<Mesh> get_collision_mesh() const;
 	void set_mesh_vertices(const PackedVector3Array &p_vertices);
 	PackedVector3Array get_mesh_vertices() const;
+	void set_baked_collision(const Ref<Box3DBakedCollision> &p_collision);
+	Ref<Box3DBakedCollision> get_baked_collision() const;
 	void set_mesh_indices(const PackedInt32Array &p_indices);
 	PackedInt32Array get_mesh_indices() const;
 	void set_mesh_materials(const PackedByteArray &p_materials);

@@ -4,6 +4,7 @@
 #include "register_types.h"
 
 #include "box3d_body.h"
+#include "box3d_baked_collision.h"
 #include "box3d_character.h"
 #include "box3d_collision.h"
 #include "box3d_collision_shape.h"
@@ -47,6 +48,7 @@ void initialize_box3d_module(ModuleInitializationLevel p_level) {
 		return;
 	}
 	GDREGISTER_CLASS(Box3DWorld);
+	GDREGISTER_CLASS(Box3DBakedCollision);
 	GDREGISTER_CLASS(Box3DBody);
 	GDREGISTER_CLASS(Box3DCharacterBody);
 	GDREGISTER_CLASS(Box3DCollisionShape);

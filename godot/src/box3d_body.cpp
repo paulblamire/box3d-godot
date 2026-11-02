@@ -326,7 +326,94 @@ void Box3DBody::create_in_world() {
 	world->register_body(this);
 }
 
-void Box3DBody::build_shapes() {
+// Scene/body lifecycle remains on the main thread. No resource storage mutation.
+void Box3DBody::build_offline_baked_shape()
+{
+	if ( !node_scale.is_equal_approx( Vector3( 1, 1, 1 ) ) )
+	{
+		UtilityFunctions::push_error( "Box3DBody baked_collision requires unit node scale; bake "
+									  "dimensions in local coordinates." );
+		return;
+	}
+	b3ShapeDef sd = b3DefaultShapeDef();
+	sd.density = (float)density;
+	sd.baseMaterial.friction = (float)friction;
+	sd.baseMaterial.restitution = (float)restitution;
+	sd.baseMaterial.rollingResistance = (float)rolling_resistance;
+	sd.baseMaterial.tangentVelocity = to_b3( tangent_velocity );
+	sd.baseMaterial.userMaterialId = (uint64_t)user_material_id;
+	sd.enableContactEvents = contact_monitor;
+	sd.filter = make_filter();
+	sd.isSensor = is_sensor;
+	sd.explosionScale = (float)explosion_scale;
+	sd.invokeContactCreation = invoke_contact_creation;
+	sd.enableSpeculativeContact = speculative_contact;
+	sd.enableSensorEvents = sensor_events;
+	sd.enableHitEvents = hit_events;
+	CharString node_name = String( get_name() ).utf8();
+	sd.name = node_name.get_data();
+	const b3CompoundData* compound = baked_collision->get_compound();
+	bool direct_mesh = false;
+	if ( compound->meshCount == 1 && compound->hullCount == 0 && compound->capsuleCount == 0 &&
+		 compound->sphereCount == 0 )
+	{
+		const b3CompoundMesh mesh = b3GetCompoundMesh( compound, 0 );
+		const b3Transform& xf = mesh.transform;
+		const bool identity = xf.p.x == 0 && xf.p.y == 0 && xf.p.z == 0 && xf.q.v.x == 0 &&
+							  xf.q.v.y == 0 && xf.q.v.z == 0 && ( xf.q.s == 1 || xf.q.s == -1 );
+		if ( identity )
+		{
+			// Compound children index the compound material table indirectly.
+			// b3CreateMeshShape copies these definitions during attachment.
+			const b3SurfaceMaterial* materials = b3GetCompoundMaterials( compound );
+			std::vector<b3SurfaceMaterial> child_materials( size_t( mesh.materialCount ) );
+			for ( int i = 0; i < mesh.materialCount; ++i )
+			{
+				child_materials[size_t( i )] = materials[mesh.materialIndices[i]];
+			}
+			sd.materials = child_materials.data();
+			sd.materialCount = mesh.materialCount;
+			b3CreateMeshShape( body_id, &sd, mesh.meshData, mesh.scale );
+			direct_mesh = true;
+		}
+	}
+	if ( !direct_mesh )
+	{
+		b3CreateBakedCompoundShape( body_id, &sd, compound );
+	}
+	debug_mass = b3Body_GetMass( body_id );
+	debug_has_child_shapes = true;
+}
+
+void Box3DBody::set_baked_collision( const Ref<Box3DBakedCollision>& p_collision )
+{
+	if ( body_live() )
+	{
+		UtilityFunctions::push_error(
+			"Box3DBody: baked_collision can only be assigned before the native body is live." );
+		return;
+	}
+	if ( p_collision.is_valid() && !p_collision->get_compound() )
+	{
+		UtilityFunctions::push_error(
+			"Box3DBody: baked_collision must be created by bake or from_bytes." );
+		return;
+	}
+	baked_collision = p_collision;
+}
+
+Ref<Box3DBakedCollision> Box3DBody::get_baked_collision() const
+{
+	return baked_collision;
+}
+
+void Box3DBody::build_shapes()
+{
+	if ( baked_collision.is_valid() )
+	{
+		build_offline_baked_shape();
+		return;
+	}
 	// Compound bodies: if there are Box3DCollisionShape children, build a shape
 	// for each and skip the body's own shape_type.
 	{
@@ -1331,7 +1418,7 @@ bool Box3DBody::create_baked_compound(const Transform3D &p_body_inv) {
 
 bool Box3DBody::resize_child_shape(Box3DCollisionShape *p_shape) {
 	// A baked compound is one immutable shape; its children hold no handle.
-	if (compound_data != nullptr || p_shape == nullptr || !body_live()) {
+	if (baked_collision.is_valid() || compound_data != nullptr || p_shape == nullptr || !body_live()) {
 		return false;
 	}
 	const b3ShapeId id = p_shape->get_shape_id();
@@ -2775,6 +2862,7 @@ bool Box3DBody::get_baked_compound() const {
 }
 
 Dictionary Box3DBody::get_compound_info() const {
+	if (baked_collision.is_valid()) return baked_collision->get_info();
 	Dictionary out;
 	if (compound_data == nullptr) {
 		return out;
@@ -3242,6 +3330,8 @@ void Box3DBody::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_collision_mesh"), &Box3DBody::get_collision_mesh);
 	ClassDB::bind_method(D_METHOD("set_mesh_vertices", "vertices"), &Box3DBody::set_mesh_vertices);
 	ClassDB::bind_method(D_METHOD("get_mesh_vertices"), &Box3DBody::get_mesh_vertices);
+	ClassDB::bind_method(D_METHOD("set_baked_collision", "collision"), &Box3DBody::set_baked_collision);
+	ClassDB::bind_method(D_METHOD("get_baked_collision"), &Box3DBody::get_baked_collision);
 	ClassDB::bind_method(D_METHOD("set_mesh_indices", "indices"), &Box3DBody::set_mesh_indices);
 	ClassDB::bind_method(D_METHOD("get_mesh_indices"), &Box3DBody::get_mesh_indices);
 	ClassDB::bind_method(D_METHOD("set_mesh_materials", "materials"), &Box3DBody::set_mesh_materials);
@@ -3405,6 +3495,7 @@ void Box3DBody::_bind_methods() {
 
 	ADD_GROUP("Mesh Data", "mesh_");
 	ADD_PROPERTY(PropertyInfo(Variant::PACKED_VECTOR3_ARRAY, "mesh_vertices"), "set_mesh_vertices", "get_mesh_vertices");
+	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "baked_collision", PROPERTY_HINT_RESOURCE_TYPE, "Box3DBakedCollision"), "set_baked_collision", "get_baked_collision");
 	ADD_PROPERTY(PropertyInfo(Variant::PACKED_INT32_ARRAY, "mesh_indices"), "set_mesh_indices", "get_mesh_indices");
 	ADD_PROPERTY(PropertyInfo(Variant::PACKED_BYTE_ARRAY, "mesh_materials"), "set_mesh_materials", "get_mesh_materials");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "mesh_weld_tolerance", PROPERTY_HINT_RANGE, "0,1,0.0001,or_greater,suffix:m"), "set_mesh_weld_tolerance", "get_mesh_weld_tolerance");
